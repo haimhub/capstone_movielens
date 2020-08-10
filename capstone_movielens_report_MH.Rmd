@@ -1,0 +1,376 @@
+---
+title: 'Movie Recommendation system based on MovieLens 10M data'
+author: 'Author: Martin Haitzmann (martin.c.haitzmann@gmail.com)'
+subtitle: 'HarvardX project submission - PH125.9x Data Science: Capstone'
+date: 'Last Update: `r format(Sys.time(), "%d %B, %Y")`'
+output:
+  pdf_document:
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+editor_options:
+  
+  chunk_output_type: console
+references:
+- id: rafa
+  title: Introduction to Data Science
+  author:
+  - family: Irizarry
+    given: Rafael A.
+  URL: 'https://leanpub.com/datasciencebook'
+  issued:
+    year: 2019
+---
+
+# Overview
+
+Recommendation systems are one of the most popular data science methodologies coming from the field of machine learning [@rafa, p. 499]. The main goal of this project is to predict how a user would rate a specific movie, based on how the user rated other movies and how the movie is rated by other users. Several techniques outlined in @rafa [chapter 33.7] will be applied on the "MovieLens" data-set combined with other findings resulting from the explanatory analysis of the input data. 
+
+The movieLens database maintained by GroupLens research lab^[https://grouplens.org/] contains different datasets. As the full data-set is huge, affording quite some computing power for proper processing, this project is based on  the “10Mversion"^[https://grouplens.org/datasets/movielens/10m/] containing around 10 million ratings (~10000 movies rated by ~70000 users - respectively rather userId's).
+
+The 10M data is downloaded and split into an edx data-set (for analysis and training the algorithm) and a validation data-set (for final testing of the developed model)^[R code provided by the course facilitators].
+
+```{r, eval = TRUE, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
+options(pillar.sigfig = 4)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tufte'), 
+kable.force.latex = TRUE)
+
+kable1 <- function(data) {
+  knitr::kable(data, booktabs = TRUE, digits = 5, row.names = FALSE, format = "latex") %>% 
+    kable_styling(latex_options =c("striped", "scale_down"))
+}
+
+source("./get_data_call_model.R")
+
+cat("\nDimensions (rows cols) of edx: ", dim(edx), "\n")
+
+cat("\nDimensions (rows cols) of validation: ", dim(validation), "\n")
+
+cat("\nAre there any missings (NA) in the data?: ", anyNA(edx), "\n")
+
+cat("\nThe data entries itself look like:\n")
+
+kable1(head(edx))
+
+```
+
+So every data-row represents a rating for a specific movie of one user/userId and contains some additional information (timestamp, movie title, genres). If every user had rated every movie, the data-set should contain about `r round(length(unique(c(edx$movieId, validation$movieId))) * length(unique(c(edx$userId, validation$userId))), -7)/1000000` Mio. data-rows instead of 10 Mio. This implies that not every user rated every movie. The idea of this recommendation system is to predict what a specific user would rate a movie he has not rated.
+
+As outlined by the course facilitators, one should develop one's own algorithm using the edx data-set only (split the edx data into separate training and test sets ). For a final test of the best performing algorithm, movie ratings in the validation set (the final hold-out test set) should be predicted as if they were unknown. RMSE should be used to evaluate how close the predictions are to the true values in the validation set (the final hold-out test set). 
+
+$$
+\mbox{RMSE} = \sqrt{\frac{1}{N} \sum_{u,i}^{} \left( \hat{y}_{u,i} - y_{u,i} \right)^2 }
+$$
+with $y_{u,i}$ as the rating for movie $i$ by user $u$ and 
+with $N$ being the number of user/movie combinations and the sum occurring over all these combinations.
+
+The **analysis and methods section** includes a descriptive analysis of the downloaded data. The gained insights lead to additional ideas on how different explanatory variables might further influence our response variable (rating) and as a consequence be included in the modeling approach. 
+The development of the models is based solely on the edx data set, which will be split up in a train and test set for this purpose. As plenty of work was already done by many data scientists on possible approaches, this paper will definitely start with introducing the baseline models with the effects described e.g. in @rafa[chap. 33.7]. Even the winners of the Netflix challenge give high importance to the baseline predictors^[http://blog.echen.me/2011/10/24/winning-the-netflix-prize-a-summary/]:
+
+>Of the numerous new algorithmic contributions, I would like to highlight one – those humble baseline predictors (or biases), which capture main effects in the data. While the literature mostly concentrates on the more sophisticated algorithmic aspects, we have learned that an accurate treatment of main effects is probably at least as significant as coming up with modeling breakthroughs.
+
+The ***explanatory data analysis*** reveals among others that there might be some *userspecific calender/daytime effect*. One might think of it as: does the daytime (morning, afternoon, evening, night) when people rate films have an influence on the ratings? What about weekdays vs. weekends? It seems obvious that this might not produce a general effect, as people life in different time zones, have different working days, ..., but especially in connection with single userId's that gave enough ratings, there might be a correlation that explains some of the variability.
+
+**Finally, the model with the lowest RSME** is trained on the whole edx data set and **tested with the validation set**. One of the goals of the this capstone project is to reach an RMSE < 0.86490. ***The final model chosen in this small project reached a RMSE on the validation data-set of 0.85842 and the improvements can therefore be considered to be successful.*** 
+
+# Analysis and methods
+
+This section first focuses on an exploratory analysis of the variables prevalent in the input data-set (edx). Descriptive statistics should ideally reveal patterns in explanatory variables that might have a significant impact on the response variable (rating). The insights are then further used to fine tune the models. The models itself are based on the baseline predictors explained in @rafa[chap. 33.7], as these predictors are well explained and already show a very good performance. ***With additional information from the exploratory analysis, it is especially tried to improve the "Movie + User Effects Model" and apply regularization on such an improved model.***
+
+## Explore the data
+```{r, eval = TRUE, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
+# draw a sample from edx for developing the code
+if (F) {
+B <- 100000
+edx <- edx[ as.integer(sample(rownames(edx), B, replace = FALSE)), ]  
+}
+
+d.rows <- nrow(edx)
+d.cols <- ncol(edx)
+
+mean.rating <- mean(edx$rating)
+``` 
+
+
+Inspect all variables in detail and think of possible ways these variables might explain part of the value of the target variable "rating".
+
+### Response variable (rating)
+
+Ratings are prevalent in 0.5 steps. Most of the ratings refer to 4, 3 and 5 stars. The mean rating is `r mean.rating`.
+
+```{r, eval = TRUE, echo = FALSE, warning=FALSE, message=FALSE, results='markup'}
+tab1 <- table(edx$rating)
+cat("\nFrequency of Ratings: \n")
+addmargins(tab1)
+
+#cat("\nProportion of Ratings: \n")
+plot(prop.table(tab1), main = "Proportion of Ratings", xlab = "Rating", ylab = "Proportion of all ratings")
+cat("\nBasic summary statistics of ratings: \n")
+summary(edx$rating)
+```
+
+### Explanatory variables
+
+#### userId
+
+User specific influence should from a theoretical point of view of course be measured in a recommendation system that is based on users' likes and dislikes. To simplify the model and reduce computing time/memory withsuch large datasets, one might be able to reduce complexity by identifying groups of users with similar behavior. E.g. analyse the input data if high frequency raters tend to give other ratings than the "one time user", ... .
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='markup'}
+user_desc <- edx %>% group_by(userId) %>% 
+  summarize(n = n(), 
+            am = mean(rating),
+            am_cat = plyr::round_any(am, 0.5), 
+            med = median(rating),
+            med_cat = plyr::round_any(med, 0.5), 
+            iqr = IQR(rating),
+            span = max(rating)-min(rating),
+            mod = as.numeric(names(table(rating)[which.max(table(rating))])),
+            mod_n = max(table(rating))) 
+
+cat("\nBasic summary: Nr of movieId's rated per user.\n")
+
+user_desc$n %>% summary()
+
+cat("\n", length(unique(edx$userId)), "users (more precisely userId's) rated the movies in the given data-set.\n"
+)
+#user_desc[, "n"] %>% boxplot(ylab = "nr of movieId's rated per user.")
+
+edx %>% left_join(user_desc) %>% #pull(nr_ratings) %>% unique()
+  mutate(n_cat = cut(n, 
+                              breaks = quantile(n, probs = seq (0, 1, 0.1)), #c(1,2,10,35,Inf), 
+                              include.lowest = T)) %>%
+  ggplot(aes(x = as.factor(n_cat), y = rating)) + 
+  geom_violin() + 
+  xlab("Quantiles: nr of ratings per user") + 
+  theme(axis.text.x=element_text(angle=30, size = 8)) + 
+  ggtitle("Distribution of ratings (grouping: quantiles of nr of ratings per user)")
+```
+
+The data-set does not contain "one time raters". The lowest number of movies rated by one user is 10. The median user rated 62 movies. The maximum number of movies rated by a user rated is even 6616^[just a remark: supposing a movie to last one and a half our this is quite some life time this user spent watching - `r 6616 * 1.5/24` complete days nonstop]. There seems to be no obvious significant difference in the behavior of users being grouped to the number of rated movies per user according to quantiles, as illustrated by the violin plot above.
+
+#### movieId (and title)
+
+There should be a movie effect, as some movies get excellent ratings whereas others do not. These effects (blockbuster, obscure movies, old classic films, ...) are exhaustively explored in @rafa[p. 638 ff.]. That is why here, the analysis regarding movies is not further deepened. However, it is at least worth to see if the variables movieId (and title) have additional information to offer.
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
+cat("\n", length(unique(edx$movieId)), "are in the given data-set.\n")
+
+cat("\nThe variables movieId and title belong together so first check if these two variables are consistent. Are there duplicates?\n")
+
+a <- unique(edx[ , c("movieId", "title")])
+cat("\nDuplicated title:\n")
+a1 <- a[ a$title %in% a[which(duplicated(a$title)), "title"] | a$movieId %in% a[which(duplicated(a$movieId)), "movieId"],]
+a[ a$movieId %in% a1$movieId ,] %>% kable()
+
+cat("\nInterestingly one movie title has 2 different ID's. \nNormally one should reconcile that in the basic data. \nHowever, as it would affect edx and validation set and\n comparability between learners doing this capstone project,\n the data inconsistency is left as it is.\n")
+
+#some descriptive statistics, but it did not show relevant info so far, therefoe skip.
+if (F) {
+movie_desc <- edx %>% 
+  group_by(movieId, title) %>% 
+  summarize(n = n(), 
+            am = mean(rating),
+            am_cat = plyr::round_any(am, 0.5), 
+            med = median(rating),
+            med_cat = plyr::round_any(med, 0.5), 
+            iqr = IQR(rating),
+            span = max(rating)-min(rating),
+            mod = as.numeric(names(table(rating)[which.max(table(rating))])),
+            mod_n = max(table(rating))
+  ) 
+
+cat("\nMost rated movies.\n")
+#movie_desc %>% top_n(10) %>% arrange(desc(n))
+#movie_desc %>% ggplot(aes(x = n, y = iqr, size = n)) + geom_point()
+#movie_desc %>% filter( am == med & med == mod ) %>% mutate(mod_n_share = mod_n/d.rows) %>% arrange(desc(mod_n_share))
+#movie_desc %>% top_n(10) %>% arrange(desc(mod_n_share)) 
+movie_desc %>% mutate(mod_n_share = mod_n/d.rows) %>% ggplot(aes(x = am, y = mod, size = mod_n_share)) + geom_point()
+#movie_desc %>% ggplot(aes(x = am, y = mod, color = med)) + geom_point()
+
+edx %>% left_join(movie_desc) %>% mutate(mod_n_share = mod_n/d.rows) %>% ggplot(aes(x = rating, y = mod, size = mod_n_share)) + geom_violin()
+edx %>% left_join(movie_desc) %>% mutate(x1 = identical(am,mod), x2 = identical(am, med), x = (x1+x2)/2) %>% ggplot(aes(x = x, y = rating, size = mod_n_share)) + geom_point()
+
+edx <- edx %>% left_join(movie_desc)
+}
+```
+
+#### genres
+
+Movies belonging to different genres are all displayed in one compact variable. However, such data presentation does not allow easy processing. Ideally a column for every genre is created and filled with 1/0 (resp. TRUE/FALSE) to analyse the effect of each genre, e.g. fitting regressions. Due to computing power restrictions, in this case it is only explored if there are obvious differences in the ratings for some genres. 
+
+As the violin plot suggests, Film-Noir, IMAX and Documentary tend to have nearly no ratings below three. 
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='markup'}
+edx[ as.integer(sample(rownames(edx), 1000000)),] %>% 
+  separate_rows(genres, sep = "\\|") %>%
+  ggplot(aes(x = rating, y = genres)) + geom_violin() + 
+  ggtitle("Ratings per genre (for a sample of 1000000 data-rows)")
+```
+
+That is why movies belonging to one of this 3 genres are subsumed in a category genre_FN_IMAX_DOC. Fitting a simple regression, the effect is with very high significance estimated to be about 0.4 (stars), so the effect of this category is further investigated in the model approach.
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='markup'}
+edx$genre_FN_IMAX_DOC <- 0  
+edx$genre_FN_IMAX_DOC[ grep("Film-Noir|IMAX|Documentary", edx$genres)] <- 1 
+
+summary(lm(rating ~ genre_FN_IMAX_DOC, data = edx))
+``` 
+
+
+#### timestamp
+
+The variable timestamp contains information on when the rating was saved in the database. In order to make a useful exploratory analysis, it is first essential to transform the data into user friendly format and extract year, month, day, ... information. 
+
+Regarding further analysis one could inspect how ratings developed over the years. Furthermore it could be interesting to see if there is a weekend/weekday effect. Measuring holiday effects in general would be interesting, but as there is a lack of geoinformation where the user lived, this cannot be done within the scope of this analysis. 
+
+Interesting information could also be revealed searching for a daytime effect: there will of course be no general effect that ratings in the morning are significantly different to evening ratings (the more as there are different time zones and without geoinformation it is impossible to find out what daytime actually was when a rating was given resp. saved in the database). However, splitting the 24 h day into slices and combining it individually with the userId, could reveal some pattern for specific users - e.g. do frequent raters rate differently when they do the ratings in the morning?.
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis', fig.width=12, fig.height=7}
+a <- edx %>% mutate(
+                r_y = year(as_datetime(timestamp)),
+                r_m = month(as_datetime(timestamp)),
+                r_q = quarter(as_datetime(timestamp)),
+                #r_h = tis::isBusinessDay(as_datetime(timestamp)),
+                r_h = chron::is.weekend(strftime(as_datetime(timestamp), format = "%m/%d/%y")),
+                r_t = cut(x = lubridate::hour(as_datetime(timestamp)), 
+                  breaks = lubridate::hour(hm(c("00:00", "6:00", "12:00", "18:00", "23:59"))), 
+                  labels = c("Night (0-6)", "Morning (6-12)", "Afternoon (12-18)", "Evening (18-24)"), 
+                  include.lowest=TRUE)
+              )  
+
+a %>% ggplot(aes(x = as.factor(r_y), y = rating)) + 
+  geom_violin() + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Development of ratings over years") + 
+  xlab("Year")
+
+cat("\nThe above illustration reveals that the half * ratings were only introduced in 2003.\n So it would make sense to take this in the model building into consideration.\n Furthermore the violin plot reveals a different pattern of ratings in 2009.\n However this is just due to the lower number of entries in 2009,\n as the last rating in the edx data-set was saved in Jan 2009.:\n")
+table(as.factor(a$r_m),as.factor(a$r_y)) %>% kable1()
+```
+
+***Is there an effect between ratings before 2003 and afterwards, due to the introduction of half stars?***
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='markup'}
+a$before2003 <- 0  
+a$before2003[ which(a$r_y <= 2002)] <- 1 
+
+summary(lm(rating ~ before2003, data = a))
+```
+
+The fitted regression suggests a significant effect but with not even 0.1 (stars) difference it is not further evaluated in the model section.
+
+
+A view on ***daytimes*** (in the below figure per quarter of a year) generally does not reveal any specifics as expected (timezones, ...):
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis', fig.width=12, fig.height=7}
+a %>% ggplot(aes(x = as.factor(r_q), y = rating, fill = as.factor(r_t))) + 
+  geom_violin() + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Ratings per daytime throughout different quarters") + 
+  xlab("Quarter of a year")
+
+
+cat("\nHowever user specific daytimes (in the below figure for high frequent raters with more than 4000 ratings)\n reveal some potential influence:\n\n.\n")
+
+rel.user <- user_desc$userId[ user_desc$n > 4500]
+#rel.user  <- user_desc$userId[ as.integer(sample(rownames(user_desc), 5))]
+a[ which(a$userId %in% rel.user),] %>%
+  ggplot(aes(x = as.factor(userId), y = rating, fill = r_t)) + 
+  geom_violin() + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Ratings per daytime for selected userId's") + 
+  xlab("UserId")
+```
+
+User 14463 never gave a 5* when rated in the daytime phase that is defined here as night^[based on the conversion of the timestamp variable. Do not take the wording too serious, as it is just useful for making distinctions. Correctly it is probably the daytime of the place where the server recording the ratings is located]. Furthermore, this user gives in that daytime substantially more 2* than in the 'afternoon'. 
+
+Can the effect be even more deepened when calendar information is added?
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis', fig.width=12, fig.height=7}
+rel.user <- "14463"  
+a[ which(a$userId %in% rel.user),] %>%   
+  mutate(userId_Cal_Daytime = paste(userId, r_t, r_q, r_h,  sep = "|")) %>% 
+  ggplot(aes(x = as.factor(userId), y = rating, fill = userId_Cal_Daytime)) + 
+  geom_violin() + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Ratings for userId 14463 per daytime|quarter|is.weekend") + 
+  xlab("UserId")
+#summary(lm(rating ~ r_q + r_h + r_t, data = a))
+```
+
+***Userspecific daytime and calendar information should be introduced in the modeling approach.*** 
+
+## Develop models 
+
+The development of the models is based solely on the edx data set, that is split up in a train and test set for this purpose. As plenty of work was already done by many data scientists on possible approaches, this paper starts applying the baseline models, as the effect and impacts are well explored and documented, e.g. in @rafa[chap. 33.7]. Even the winners of the Netflix challenge give high importance to the baseline predictors, as mentioned in the introduction.
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
+
+model_description <- data.frame(method = c("Just the average",
+                                           "Movie Effect Model",
+                                           "Movie + User Effects Model",
+                                           "Movie + User + genre_FN_IMAX_DOC Effects Model",
+                                           "Movie + User/Cal_Daytime Effects Model",
+                                           "Regularized Movie + User/Cal_Daytime Effects Model"),
+                                method_short = c("model_0_rmse",
+                                                 "model_1_rmse",
+                                                 "model_2_rmse",
+                                                 "model_2a_rmse",
+                                                 "model_2b_rmse",
+                                                 "model_3_rmse")
+                                , stringsAsFactors = FALSE)
+``` 
+
+Apply models with known effects from @rafa[ chapter 33.7]:
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
+model_description[c(1:3),] %>% kable()
+```
+
+However, further to this basic models two effects that popped up in the exploratory analysis are introduced. One effect covering the genres "Film-Noir", "IMAX" and "Documentary" in one category ***genre_FN_IMAX_DOC***. The second effect deals with a combined calendar/daytime information showing in what quarter and daytime a user saved its rating. Furthermore the information if it was a weekday or a weekend is processed. A combined ***userId_Cal_Daytime*** variable is therefore introduced. Be aware that userId_Cal_Daytime may introduce NA's when applied to the test_set, simply because a specific key representing userId_Cal_Daytime may not be prevalent. In such cases apply only the user Effect measured with the key variable userId.
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
+model_description[c(4:5),] %>% kable()
+```
+
+In case one of the effects brings an improvement, regularization is carried out on that model, to penalize higher deviations. 
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
+model_description[c(6),] %>% kable()
+```
+
+# Results
+
+The results section first covers the results for the model development. The best model is then chosen to get the final RMSE estimate based on edx as train_set and validation data as test_set.
+
+## Preliminary Modeling (edx split into train_set and test_set)
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='markup'}
+prelim_results <- models_methods(final = FALSE) 
+prelim_results %>% kable1()
+```
+
+RMSE shows that the introduction of a ***userspecific calendar and daytime effect** brings an improvement. The best performing model **Regularized Movie + User/Cal_Daytime Effects Model** is chosen to be applied  for the final evaluation.
+
+## Final Modeling (edx is train_set and validation test_set)
+As we can see from the result table below, ***Regularized Movie + User/Cal_Daytime Effects Model*** achieved the target RMSE when the complete edx data set is trained and the validation data used as test_set. ***The project goal for earning full points is achieved as the RMSE stays quite far below the target value^[RMSE < 0.86490 predefined by course facilitators].***
+
+```{r, eval = T, echo = FALSE, warning=FALSE, message=FALSE, results='markup'}
+final_result <- models_methods(final = TRUE, final_lambda = 4.2) 
+final_result %>% kable1()
+```
+
+# Conclusion
+It was shown that the introduction of a combined ***user + calender + daytime effect*** could improve the performance of the model. The final RMSE was `r final_result$RMSE` and therefore quite below the threshold predefined by the course facilitators of RMSE < 0.86490^[threshold for earning full points].
+
+The developpment of this recommendation system was done within time and processing power resrtictions to above all achieve the predefined goals of this capstone project.  Future improvements should contain approaches using matrix factorisation on residuals of the baseline models, e.g. by experimenting with the recommenderlab package. 
+
+# Appendix
+```{r}
+print(sessionInfo())
+```
+
+# References
