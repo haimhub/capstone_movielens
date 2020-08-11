@@ -33,7 +33,6 @@ The 10M data is downloaded and split into an edx data-set (for analysis and trai
 
 ```{r, eval = TRUE, echo = FALSE, warning=FALSE, message=FALSE, results='asis'}
 options(pillar.sigfig = 4)
-library(lubridate)
 library(knitr)
 library(kableExtra)
 knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tufte'), 
